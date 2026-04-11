@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
 // ─── Card utilities ──────────────────────────────────────────────────────────
@@ -288,13 +289,16 @@ export const selectGame = mutation({
       const ds = gs.vetoedBySeat !== undefined
         ? [seatIndex, gs.vetoedBySeat]
         : [seatIndex];
+      const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
       await ctx.db.patch(gs._id, {
         selectedGame: gameId,
         phase: "playing",
         doublingSeats: ds,
         currentTrickLeaderSeat: (seatIndex + 1) % 4,
         currentTurnSeat: (seatIndex + 1) % 4,
+        turnSequenceId: nextTurnSeq,
       });
+      await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
     } else {
       await ctx.db.patch(gs._id, {
         selectedGame: gameId,
@@ -384,6 +388,7 @@ export const skipVeto = mutation({
         ? [lobby.chooserSeatIndex, gs.vetoedBySeat]
         : [lobby.chooserSeatIndex];
 
+      const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
       await ctx.db.patch(gs._id, {
         phase: "playing",
         doublingSeats: ds,
@@ -396,7 +401,9 @@ export const skipVeto = mutation({
         trixPiles: { H: [], D: [], C: [], S: [] },
         trixCurrentPlayerSeat: (lobby.chooserSeatIndex + 1) % 4,
         bonusPlay: false,
+        turnSequenceId: nextTurnSeq,
       });
+      await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
     }
   },
 });
@@ -405,6 +412,11 @@ export const skipVeto = mutation({
 export const playCard = mutation({
   args: { code: v.string(), seatIndex: v.number(), card: v.string() },
   handler: async (ctx, { code, seatIndex, card }) => {
+    await performPlayCard(ctx, code, seatIndex, card);
+  },
+});
+
+export async function performPlayCard(ctx: any, code: string, seatIndex: number, card: string) {
     const lobby = await ctx.db.query("lobbies").withIndex("by_code", (q) => q.eq("code", code)).first();
     if (!lobby) throw new Error("Lobby not found");
     const gs = await ctx.db.query("gameState").withIndex("by_lobby", (q) => q.eq("lobbyId", lobby._id)).first();
@@ -469,7 +481,9 @@ export const playCard = mutation({
         : (seatIndex + 1) % 4;
       if (isAce && newCards.length > 0) {
         // bonus play: same player goes again
-        await ctx.db.patch(gs._id, { trixPiles: newPiles, trixOrder: newTrixOrder, bonusPlay: true, trixCurrentPlayerSeat: seatIndex });
+        const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
+        await ctx.db.patch(gs._id, { trixPiles: newPiles, trixOrder: newTrixOrder, bonusPlay: true, trixCurrentPlayerSeat: seatIndex, turnSequenceId: nextTurnSeq });
+        await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
         return;
       }
 
@@ -485,9 +499,11 @@ export const playCard = mutation({
         nextSeat = (nextSeat + 1) % 4;
         tries++;
       }
+      const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
       await ctx.db.patch(gs._id, {
-        trixPiles: newPiles, trixOrder: newTrixOrder, bonusPlay: false, trixCurrentPlayerSeat: nextSeat,
+        trixPiles: newPiles, trixOrder: newTrixOrder, bonusPlay: false, trixCurrentPlayerSeat: nextSeat, turnSequenceId: nextTurnSeq,
       });
+      await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
       return;
     }
 
@@ -555,10 +571,13 @@ export const playCard = mutation({
 
     if (newTrick.length < 4) {
       // Next player in trick
+      const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
       await ctx.db.patch(gs._id, {
         currentTrick: newTrick,
         currentTurnSeat: (seatIndex + 1) % 4,
+        turnSequenceId: nextTurnSeq,
       });
+      await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
       return;
     }
 
@@ -579,6 +598,7 @@ export const playCard = mutation({
     if (gs.selectedGame === "queen-spades" && allPlayed.includes("QS") && allPlayed.filter(c => c.endsWith("H")).length === 8) terminateEarly = true;
 
     if (newCompleted < 8 && !terminateEarly) {
+      const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
       await ctx.db.patch(gs._id, {
         currentTrick: [],
         currentTrickLeaderSeat: winner,
@@ -586,7 +606,9 @@ export const playCard = mutation({
         tricksTaken: newTricksTaken,
         lastTrickTakerSeat: winner,
         completedTricks: newCompleted,
+        turnSequenceId: nextTurnSeq,
       });
+      await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
       return;
     }
 
@@ -619,8 +641,7 @@ export const playCard = mutation({
       phase: isGameOver ? "game-over" : "round-over",
       roundScoreSummary: summary.map((s) => ({ name: s.name, roundScore: s.roundScore, totalScore: s.totalScore, isDoubled: s.isDoubled })),
     });
-  },
-});
+}
 
 // ─── nextRound ───────────────────────────────────────────────────────────────
 export const nextRound = mutation({
@@ -672,4 +693,68 @@ export const nextRound = mutation({
       roundScoreSummary: undefined,
     });
   },
+});
+
+
+// ─── autoPlayTurn ────────────────────────────────────────────────────────────
+export const autoPlayTurn = internalMutation({
+  args: { code: v.string(), turnSequenceId: v.number() },
+  handler: async (ctx, { code, turnSequenceId }) => {
+    const lobby = await ctx.db.query("lobbies").withIndex("by_code", (q) => q.eq("code", code)).first();
+    if (!lobby) return;
+    const gs = await ctx.db.query("gameState").withIndex("by_lobby", (q) => q.eq("lobbyId", lobby._id)).first();
+    if (!gs || gs.phase !== "playing") return;
+    if (gs.turnSequenceId !== turnSequenceId) return;
+
+    const isTrix = gs.selectedGame === "trix";
+    const seatIndex = isTrix ? gs.trixCurrentPlayerSeat : gs.currentTurnSeat;
+
+    const handDoc = await ctx.db.query("playerHands")
+      .withIndex("by_lobby_seat", (q) => q.eq("lobbyId", lobby._id).eq("seatIndex", seatIndex))
+      .first();
+    if (!handDoc || handDoc.cards.length === 0) return;
+
+    let playableCards: string[] = [];
+    if (isTrix) {
+      playableCards = getValidTrixCards(handDoc.cards, gs.trixPiles);
+    } else {
+      const trick = gs.currentTrick;
+      const isLeading = trick.length === 0;
+
+      let playable = handDoc.cards;
+      if (!isLeading) {
+        const leadSuit = getSuit(trick[0].card);
+        const hasSuit = handDoc.cards.some(c => getSuit(c) === leadSuit);
+        if (hasSuit) playable = handDoc.cards.filter(c => getSuit(c) === leadSuit);
+      }
+      
+      let trulyValid = playable;
+      if (gs.completedTricks === 0) {
+        const valued = getValuedCards(gs.selectedGame!);
+        const safeCards = playable.filter(c => !valued.includes(c));
+        if (safeCards.length > 0) trulyValid = safeCards;
+      } else if (isLeading && gs.completedTricks > 0) {
+        const allPlayed = gs.tricksTaken.flat();
+        const game = gs.selectedGame!;
+        const brokenSuits: string[] = [];
+        if ((game === "queen-spades" || game === "general") && allPlayed.some(c => getSuit(c) === "H")) brokenSuits.push("H");
+        if ((game === "diamonds" || game === "general") && allPlayed.some(c => getSuit(c) === "D")) brokenSuits.push("D");
+
+        const safeLeadCards = playable.filter(c => {
+          if (game === "queen-spades" && getSuit(c) === "H" && !brokenSuits.includes("H")) return false;
+          if (game === "diamonds" && getSuit(c) === "D" && !brokenSuits.includes("D")) return false;
+          if (game === "general" && getSuit(c) === "H" && !brokenSuits.includes("H")) return false;
+          if (game === "general" && getSuit(c) === "D" && !brokenSuits.includes("D")) return false;
+          return true;
+        });
+
+        if (safeLeadCards.length > 0) trulyValid = safeLeadCards;
+      }
+      playableCards = trulyValid;
+    }
+
+    if (playableCards.length === 0) return;
+    const randomCard = playableCards[Math.floor(Math.random() * playableCards.length)];
+    await performPlayCard(ctx, code, seatIndex, randomCard);
+  }
 });

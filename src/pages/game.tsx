@@ -238,6 +238,7 @@ export default function GamePage() {
   const playCardMut          = useMutation(api.game.playCard)
   const selectGameMut        = useMutation(api.game.selectGame)
   const useVetoMut           = useMutation(api.game.useVeto)
+  const skipVetoMut          = useMutation(api.game.skipVeto)
   const confirmVetoWindowMut = useMutation(api.game.confirmVetoWindow)
   const nextRoundMut         = useMutation(api.game.nextRound)
 
@@ -416,6 +417,153 @@ export default function GamePage() {
             <Badge className="bg-yellow-500 text-emerald-950 font-black text-sm px-3 py-1 animate-bounce">YOUR TURN</Badge>
           </div>
         )}
+
+        {/* ── OVERLAYS ─────────────────────────────────────────────────────────── */}
+
+        {/* SELECTION overlay */}
+        {gs.phase === "selection" && (
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-30 flex items-center justify-center p-4">
+            <Card className="bg-[#064e3b] border-white/20 w-full max-w-md max-h-full overflow-y-auto">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-white text-center">
+                  {amChooser ? "🎴 Choose Your Game" : `Waiting for ${lobby.seats[lobby.chooserSeatIndex]?.name} to choose…`}
+                </CardTitle>
+              </CardHeader>
+              {amChooser && (
+                <CardContent className="space-y-2">
+                  {GAMES.map(g => {
+                    const alreadyPlayed = lobby.seats[mySeat]?.chosenGames.includes(g.id)
+                    const Icon = g.icon
+                    return (
+                      <Button key={g.id} disabled={alreadyPlayed}
+                        onClick={() => selectGameMut({ code: code!, seatIndex: mySeat, gameId: g.id }).catch((e: any) => toast.error(e.message))}
+                        variant="outline"
+                        className={cn("w-full h-14 justify-start gap-3 border-2 transition-all",
+                          alreadyPlayed ? "opacity-40 grayscale" : cn("bg-white/5 hover:bg-white/15", g.border, "text-white")
+                        )}
+                      >
+                        <Icon className={cn("w-6 h-6", g.color)} />
+                        <span className="font-bold">{g.name}</span>
+                        {alreadyPlayed && <span className="ml-auto text-xs text-white/40">Played</span>}
+                      </Button>
+                    )
+                  })}
+                </CardContent>
+              )}
+              {!amChooser && (
+                <CardContent className="text-center py-8">
+                  <Loader2 className="w-8 h-8 text-yellow-400 animate-spin mx-auto" />
+                </CardContent>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* VETO overlay */}
+        {gs.phase === "veto" && gs.selectedGame && (
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-30 flex items-center justify-center p-4">
+            <Card className="bg-[#064e3b] border-white/20 w-full max-w-sm max-h-full overflow-y-auto">
+              <div className="bg-yellow-500 text-emerald-950 text-center font-black text-lg py-3 px-4 rounded-t-lg">
+                VETO WINDOW — {vetoSecsLeft}s
+              </div>
+              <CardContent className="p-6 space-y-5">
+                <div className="text-center">
+                  {(() => {
+                    const g = GAMES.find(x => x.id === gs.selectedGame)
+                    const Icon = g?.icon ?? Star
+                    return (
+                      <div className="flex flex-col items-center gap-2">
+                        <div className={cn("p-4 rounded-full", g?.bg)}>
+                          <Icon className={cn("w-12 h-12", g?.color)} />
+                        </div>
+                        <h3 className="text-xl font-black text-white">{g?.name}</h3>
+                        <p className="text-sm text-emerald-200/60">
+                          Selected by <span className="text-yellow-400">{lobby.seats[lobby.chooserSeatIndex]?.name}</span>
+                        </p>
+                      </div>
+                    )
+                  })()}
+                </div>
+
+                {/* Timer bar */}
+                <div className="w-full bg-white/10 rounded-full h-2">
+                  <div className="bg-yellow-400 h-2 rounded-full transition-all duration-250"
+                    style={{ width: `${(vetoSecsLeft / 10) * 100}%` }} />
+                </div>
+
+                {/* Veto button (not for chooser, not if already used) */}
+                {mySeat !== lobby.chooserSeatIndex && myHasVeto && !gs.vetoSkippedBySeats?.includes(mySeat) && (
+                  <div className="flex flex-col gap-3">
+                    <Button
+                      onClick={() => useVetoMut({ code: code!, seatIndex: mySeat }).catch((e: any) => toast.error(e.message))}
+                      className="w-full h-14 bg-red-600 hover:bg-red-500 text-white font-black text-lg"
+                    >
+                      <Ban className="mr-2 w-5 h-5" /> USE MY VETO
+                    </Button>
+                    <Button
+                      onClick={() => skipVetoMut({ code: code!, seatIndex: mySeat }).catch((e: any) => toast.error(e.message))}
+                      variant="outline"
+                      className="w-full h-12 bg-white/5 border-white/20 text-white hover:bg-white/10 hover:text-white"
+                    >
+                      Skip Veto
+                    </Button>
+                  </div>
+                )}
+                {mySeat !== lobby.chooserSeatIndex && !myHasVeto && (
+                  <p className="text-center text-white/40 text-sm italic">You've used your veto</p>
+                )}
+                {mySeat !== lobby.chooserSeatIndex && myHasVeto && gs.vetoSkippedBySeats?.includes(mySeat) && (
+                  <p className="text-center text-white/60 text-sm">Waiting for others to decide…</p>
+                )}
+                {mySeat === lobby.chooserSeatIndex && (
+                  <p className="text-center text-white/60 text-sm">Waiting for others to decide…</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* ROUND OVER overlay */}
+        {gs.phase === "round-over" && gs.roundScoreSummary && (
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-30 flex items-center justify-center p-4">
+            <Card className="bg-[#064e3b] border-white/20 w-full max-w-sm max-h-full overflow-y-auto">
+              <CardHeader>
+                <CardTitle className="text-white text-center">
+                  {(() => {
+                    const g = GAMES.find(x => x.id === gs.selectedGame)
+                    return `${g?.name ?? "Round"} — Scores`
+                  })()}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {gs.roundScoreSummary.map((s: any) => (
+                  <div key={s.name} className={cn(
+                    "flex items-center justify-between p-3 rounded-lg border",
+                    s.name === meSeat?.name ? "bg-yellow-500/10 border-yellow-400/40" : "bg-white/5 border-white/10"
+                  )}>
+                    <div>
+                      <p className="font-bold text-white">{s.name}</p>
+                      {s.isDoubled && <Badge className="bg-orange-500 text-white text-[9px] h-3 px-1">2× doubled</Badge>}
+                    </div>
+                    <div className="text-right">
+                      <p className={cn("text-lg font-black", s.roundScore > 0 ? "text-red-400" : s.roundScore < 0 ? "text-emerald-400" : "text-white/40")}>
+                        {s.roundScore > 0 ? `+${s.roundScore}` : s.roundScore}
+                      </p>
+                      <p className="text-sm text-yellow-400 font-bold">{s.totalScore} total</p>
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  onClick={() => nextRoundMut({ code: code! }).catch((e: any) => toast.error(e.message))}
+                  className="w-full h-12 bg-yellow-500 hover:bg-yellow-400 text-emerald-950 font-bold mt-2"
+                >
+                  Next Round <ArrowRight className="ml-2 w-4 h-4" />
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
       </div>
 
       {/* MY HAND at bottom */}
@@ -450,152 +598,6 @@ export default function GamePage() {
           <p className="text-center text-emerald-300 font-bold py-2">You've finished! Waiting for others…</p>
         )}
       </div>
-
-      {/* ── OVERLAYS ─────────────────────────────────────────────────────────── */}
-
-      {/* SELECTION overlay */}
-      {gs.phase === "selection" && (
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-30 flex items-center justify-center p-4">
-          <Card className="bg-[#064e3b] border-white/20 w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-white text-center">
-                {amChooser ? "🎴 Choose Your Game" : `Waiting for ${lobby.seats[lobby.chooserSeatIndex]?.name} to choose…`}
-              </CardTitle>
-            </CardHeader>
-            {amChooser && (
-              <CardContent className="space-y-2">
-                {GAMES.map(g => {
-                  const alreadyPlayed = lobby.seats[mySeat]?.chosenGames.includes(g.id)
-                  const Icon = g.icon
-                  return (
-                    <Button key={g.id} disabled={alreadyPlayed}
-                      onClick={() => selectGameMut({ code: code!, seatIndex: mySeat, gameId: g.id }).catch((e: any) => toast.error(e.message))}
-                      variant="outline"
-                      className={cn("w-full h-14 justify-start gap-3 border-2 transition-all",
-                        alreadyPlayed ? "opacity-40 grayscale" : cn("bg-white/5 hover:bg-white/15", g.border, "text-white")
-                      )}
-                    >
-                      <Icon className={cn("w-6 h-6", g.color)} />
-                      <span className="font-bold">{g.name}</span>
-                      {alreadyPlayed && <span className="ml-auto text-xs text-white/40">Played</span>}
-                    </Button>
-                  )
-                })}
-              </CardContent>
-            )}
-            {!amChooser && (
-              <CardContent className="text-center py-8">
-                <Loader2 className="w-8 h-8 text-yellow-400 animate-spin mx-auto" />
-              </CardContent>
-            )}
-          </Card>
-        </div>
-      )}
-
-      {/* VETO overlay */}
-      {gs.phase === "veto" && gs.selectedGame && (
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-30 flex items-center justify-center p-4">
-          <Card className="bg-[#064e3b] border-white/20 w-full max-w-sm">
-            <div className="bg-yellow-500 text-emerald-950 text-center font-black text-lg py-3 px-4 rounded-t-lg">
-              VETO WINDOW — {vetoSecsLeft}s
-            </div>
-            <CardContent className="p-6 space-y-5">
-              <div className="text-center">
-                {(() => {
-                  const g = GAMES.find(x => x.id === gs.selectedGame)
-                  const Icon = g?.icon ?? Star
-                  return (
-                    <div className="flex flex-col items-center gap-2">
-                      <div className={cn("p-4 rounded-full", g?.bg)}>
-                        <Icon className={cn("w-12 h-12", g?.color)} />
-                      </div>
-                      <h3 className="text-xl font-black text-white">{g?.name}</h3>
-                      <p className="text-sm text-emerald-200/60">
-                        Selected by <span className="text-yellow-400">{lobby.seats[lobby.chooserSeatIndex]?.name}</span>
-                      </p>
-                    </div>
-                  )
-                })()}
-              </div>
-
-              {/* Timer bar */}
-              <div className="w-full bg-white/10 rounded-full h-2">
-                <div className="bg-yellow-400 h-2 rounded-full transition-all duration-250"
-                  style={{ width: `${(vetoSecsLeft / 10) * 100}%` }} />
-              </div>
-
-              {/* Veto button (not for chooser, not if already used) */}
-              {mySeat !== lobby.chooserSeatIndex && myHasVeto && !gs.vetoSkippedBySeats?.includes(mySeat) && (
-                <div className="flex flex-col gap-3">
-                  <Button
-                    onClick={() => useVetoMut({ code: code!, seatIndex: mySeat }).catch((e: any) => toast.error(e.message))}
-                    className="w-full h-14 bg-red-600 hover:bg-red-500 text-white font-black text-lg"
-                  >
-                    <Ban className="mr-2 w-5 h-5" /> USE MY VETO
-                  </Button>
-                  <Button
-                    onClick={() => skipVetoMut({ code: code!, seatIndex: mySeat }).catch((e: any) => toast.error(e.message))}
-                    variant="outline"
-                    className="w-full h-12 bg-white/5 border-white/20 text-white hover:bg-white/10 hover:text-white"
-                  >
-                    Skip Veto
-                  </Button>
-                </div>
-              )}
-              {mySeat !== lobby.chooserSeatIndex && !myHasVeto && (
-                <p className="text-center text-white/40 text-sm italic">You've used your veto</p>
-              )}
-              {mySeat !== lobby.chooserSeatIndex && myHasVeto && gs.vetoSkippedBySeats?.includes(mySeat) && (
-                <p className="text-center text-white/60 text-sm">Waiting for others to decide…</p>
-              )}
-              {mySeat === lobby.chooserSeatIndex && (
-                <p className="text-center text-white/60 text-sm">Waiting for others to decide…</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ROUND OVER overlay */}
-      {gs.phase === "round-over" && gs.roundScoreSummary && (
-        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-30 flex items-center justify-center p-4">
-          <Card className="bg-[#064e3b] border-white/20 w-full max-w-sm">
-            <CardHeader>
-              <CardTitle className="text-white text-center">
-                {(() => {
-                  const g = GAMES.find(x => x.id === gs.selectedGame)
-                  return `${g?.name ?? "Round"} — Scores`
-                })()}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {gs.roundScoreSummary.map(s => (
-                <div key={s.name} className={cn(
-                  "flex items-center justify-between p-3 rounded-lg border",
-                  s.name === meSeat?.name ? "bg-yellow-500/10 border-yellow-400/40" : "bg-white/5 border-white/10"
-                )}>
-                  <div>
-                    <p className="font-bold text-white">{s.name}</p>
-                    {s.isDoubled && <Badge className="bg-orange-500 text-white text-[9px] h-3 px-1">2× doubled</Badge>}
-                  </div>
-                  <div className="text-right">
-                    <p className={cn("text-lg font-black", s.roundScore > 0 ? "text-red-400" : s.roundScore < 0 ? "text-emerald-400" : "text-white/40")}>
-                      {s.roundScore > 0 ? `+${s.roundScore}` : s.roundScore}
-                    </p>
-                    <p className="text-sm text-yellow-400 font-bold">{s.totalScore} total</p>
-                  </div>
-                </div>
-              ))}
-              <Button
-                onClick={() => nextRoundMut({ code: code! }).catch((e: any) => toast.error(e.message))}
-                className="w-full h-12 bg-yellow-500 hover:bg-yellow-400 text-emerald-950 font-bold mt-2"
-              >
-                Next Round <ArrowRight className="ml-2 w-4 h-4" />
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      )}
     </div>
   )
 }
