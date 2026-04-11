@@ -50,15 +50,40 @@ function getPlayableCards(hand: string[], gs: any, mySeat: number): string[] {
     if (gs.trixCurrentPlayerSeat !== mySeat) return []
     return getValidTrixClient(hand, gs.trixPiles)
   }
+  
   const trick = gs.currentTrick ?? []
-  if (trick.length === 0) {
-    const bad = penaltyLeadCards(gs.selectedGame ?? "")
-    const nonBad = hand.filter(c => !bad.includes(c))
-    return nonBad.length > 0 ? nonBad : hand
+  const isLeading = trick.length === 0
+  
+  let playable = hand;
+  if (!isLeading) {
+    const leadSuit = getSuit(trick[0].card)
+    const suited = hand.filter(c => getSuit(c) === leadSuit)
+    if (suited.length > 0) playable = suited;
   }
-  const leadSuit = getSuit(trick[0].card)
-  const suited = hand.filter(c => getSuit(c) === leadSuit)
-  return suited.length > 0 ? suited : hand
+
+  let trulyValid = playable;
+  if (gs.completedTricks === 0) {
+    const valued = penaltyLeadCards(gs.selectedGame ?? "");
+    const safeCards = playable.filter(c => !valued.includes(c));
+    if (safeCards.length > 0) trulyValid = safeCards;
+  } else if (isLeading && gs.completedTricks > 0) {
+    const allPlayed = gs.tricksTaken?.flat() || [];
+    const game = gs.selectedGame!;
+    const brokenSuits: string[] = [];
+    if ((game === "queen-spades" || game === "general") && allPlayed.some((c: string) => getSuit(c) === "H")) brokenSuits.push("H");
+    if ((game === "diamonds" || game === "general") && allPlayed.some((c: string) => getSuit(c) === "D")) brokenSuits.push("D");
+
+    const safeLeadCards = playable.filter(c => {
+      if (game === "queen-spades" && getSuit(c) === "H" && !brokenSuits.includes("H")) return false;
+      if (game === "diamonds" && getSuit(c) === "D" && !brokenSuits.includes("D")) return false;
+      if (game === "general" && getSuit(c) === "H" && !brokenSuits.includes("H")) return false;
+      if (game === "general" && getSuit(c) === "D" && !brokenSuits.includes("D")) return false;
+      return true;
+    });
+    if (safeLeadCards.length > 0) trulyValid = safeLeadCards;
+  }
+
+  return trulyValid;
 }
 
 function getValidTrixClient(hand: string[], piles: Record<string, string[]>): string[] {
@@ -78,8 +103,8 @@ function getValidTrixClient(hand: string[], piles: Record<string, string[]>): st
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
-function PlayingCard({ card, onClick, disabled, playable, small = false }: {
-  card: string; onClick?: () => void; disabled?: boolean; playable?: boolean; small?: boolean
+function PlayingCard({ card, onClick, disabled, playable, small = false, grayOut = true }: {
+  card: string; onClick?: () => void; disabled?: boolean; playable?: boolean; small?: boolean; grayOut?: boolean
 }) {
   const suit = getSuit(card)
   const rank = getRank(card)
@@ -95,7 +120,8 @@ function PlayingCard({ card, onClick, disabled, playable, small = false }: {
         playable && "border-yellow-400 shadow-lg shadow-yellow-400/30 -translate-y-2 cursor-pointer hover:-translate-y-3",
         !playable && onClick && "border-slate-200 cursor-pointer hover:-translate-y-1",
         !playable && !onClick && "border-slate-200 cursor-default",
-        disabled && "opacity-30 cursor-not-allowed grayscale !translate-y-0",
+        disabled && "cursor-not-allowed !translate-y-0",
+        disabled && grayOut && "opacity-30 grayscale",
       )}
     >
       <span>{rank}</span>
@@ -241,12 +267,36 @@ export default function GamePage() {
   const skipVetoMut          = useMutation(api.game.skipVeto)
   const confirmVetoWindowMut = useMutation(api.game.confirmVetoWindow)
   const nextRoundMut         = useMutation(api.game.nextRound)
+  const passTrixTurnMut      = useMutation(api.game.passTrixTurn)
 
   const [vetoSecsLeft, setVetoSecsLeft] = useState(10)
   const [playingCard, setPlayingCard]   = useState<string | null>(null)
 
   const lobby = data?.lobby
   const gs    = data?.gameState
+
+  const [turnTimerLeft, setTurnTimerLeft] = useState(30)
+
+  useEffect(() => {
+    if (gs?.phase !== "playing") return
+    setTurnTimerLeft(30)
+    const interval = setInterval(() => {
+      setTurnTimerLeft(prev => Math.max(0, prev - 1))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [gs?.turnSequenceId, gs?.phase])
+
+  // Auto-pass Trix if no cards
+  const isMyTurn = gs?.phase === "playing" && (gs?.selectedGame === "trix" ? gs?.trixCurrentPlayerSeat === mySeat : gs?.currentTurnSeat === mySeat)
+  const playable = getPlayableCards(myCards?.cards ?? [], gs, mySeat)
+  
+  useEffect(() => {
+    if (isMyTurn && gs?.phase === "playing" && gs?.selectedGame === "trix" && myCards) {
+      if (playable.length === 0) {
+        passTrixTurnMut({ code: code!, seatIndex: mySeat }).catch(console.error)
+      }
+    }
+  }, [isMyTurn, gs?.phase, gs?.selectedGame, myCards, playable.length, gs?.turnSequenceId])
 
   // Veto countdown
   useEffect(() => {
@@ -414,7 +464,7 @@ export default function GamePage() {
         {/* My turn indicator */}
         {isMyTurn && (
           <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20">
-            <Badge className="bg-yellow-500 text-emerald-950 font-black text-sm px-3 py-1 animate-bounce">YOUR TURN</Badge>
+            <Badge className="bg-yellow-500 text-emerald-950 font-black text-sm px-3 py-1 flex items-center gap-2 animate-bounce">YOUR TURN <span className="bg-emerald-900 text-yellow-400 rounded-sm px-1.5 py-0.5 text-xs font-mono">00:{turnTimerLeft.toString().padStart(2, "0")}</span></Badge>
           </div>
         )}
 
@@ -590,6 +640,7 @@ export default function GamePage() {
                 onClick={isMyTurn && playable.includes(card) ? () => handlePlayCard(card) : undefined}
                 playable={isMyTurn && playable.includes(card)}
                 disabled={!isMyTurn || !playable.includes(card) || playingCard !== null}
+                grayOut={gs.phase === "playing"}
               />
             ))}
           </div>

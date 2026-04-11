@@ -758,3 +758,43 @@ export const autoPlayTurn = internalMutation({
     await performPlayCard(ctx, code, seatIndex, randomCard);
   }
 });
+
+
+export const passTrixTurn = mutation({
+  args: { code: v.string(), seatIndex: v.number() },
+  handler: async (ctx, { code, seatIndex }) => {
+    const lobby = await ctx.db.query("lobbies").withIndex("by_code", (q) => q.eq("code", code)).first();
+    if (!lobby) return;
+    const gs = await ctx.db.query("gameState").withIndex("by_lobby", (q) => q.eq("lobbyId", lobby._id)).first();
+    if (!gs || gs.phase !== "playing" || gs.selectedGame !== "trix") return;
+    if (gs.trixCurrentPlayerSeat !== seatIndex) return;
+
+    const handDoc = await ctx.db.query("playerHands")
+      .withIndex("by_lobby_seat", (q) => q.eq("lobbyId", lobby._id).eq("seatIndex", seatIndex)).first();
+    if (!handDoc) return;
+
+    const playable = getValidTrixCards(handDoc.cards, gs.trixPiles);
+    if (playable.length > 0) return; // Cannot pass if you have playable cards
+
+    let nextSeat = (seatIndex + 1) % 4;
+    const allHands = [];
+    for (let i = 0; i < 4; i++) {
+        const h = await ctx.db.query("playerHands").withIndex("by_lobby_seat", (q) => q.eq("lobbyId", lobby._id).eq("seatIndex", i)).first();
+        allHands[i] = h?.cards ?? [];
+    }
+    
+    let tries = 0;
+    while (tries < 4) {
+        if (!gs.trixOrder.includes(nextSeat) && getValidTrixCards(allHands[nextSeat], gs.trixPiles).length > 0) break;
+        nextSeat = (nextSeat + 1) % 4;
+        tries++;
+    }
+
+    const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
+    await ctx.db.patch(gs._id, {
+        trixCurrentPlayerSeat: nextSeat, turnSequenceId: nextTurnSeq,
+    });
+    // Schedule next autoPlay
+    await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
+  }
+});
