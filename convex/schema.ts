@@ -58,6 +58,7 @@ export default defineSchema({
     lastTrickTakerSeat: v.optional(v.number()),
     completedTricks: v.number(),
     turnSequenceId: v.optional(v.number()),
+    vetoedGameId: v.optional(v.string()),
     // Trix-specific
     trixOrder: v.array(v.number()),    // finish order (seatIndex)
     trixPiles: v.object({

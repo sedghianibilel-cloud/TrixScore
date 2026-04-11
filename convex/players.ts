@@ -11,6 +11,7 @@ const PREDEFINED_PLAYERS = [
   "3a9loun",
   "Bilox",
   "Foudel",
+  "Majdi",
   "Others",
 ];
 

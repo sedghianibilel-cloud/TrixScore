@@ -378,23 +378,22 @@ export function HomePage() {
   if (gamePhase === 'setup') {
     return (
       <main className="min-h-screen bg-[#064e3b] text-white p-6 flex flex-col items-center justify-center">
-        <div className="w-full max-w-md space-y-8">
-          <div className="text-center space-y-2">
+        <div className="w-full max-w-md space-y-4">
+          <div className="text-center space-y-1">
             <h1 className="text-5xl font-black tracking-tighter italic text-yellow-400 drop-shadow-lg">TRIX</h1>
             <p className="text-emerald-100 font-medium">Score Tracker</p>
           </div>
 
           <Card className="bg-white/10 border-white/20 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-white flex items-center gap-2">
-                <Users className="w-5 h-5" /> Player Setup
+            <CardHeader className="py-4">
+              <CardTitle className="text-white flex items-center gap-2 text-lg">
+                <Users className="w-4 h-4" /> Player Setup
               </CardTitle>
-              <CardDescription className="text-emerald-100/70">Select the 4 players for this session</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3 pb-6">
               {players.map((player, idx) => (
-                <div key={idx} className="space-y-2">
-                  <Label className="text-emerald-50">Player {idx + 1}</Label>
+                <div key={idx} className="flex items-center gap-4">
+                  <Label className="text-emerald-50 shrink-0 w-20">Player {idx + 1}</Label>
                   <Select
                     value={player.name}
                     onValueChange={(val) => {
@@ -403,7 +402,7 @@ export function HomePage() {
                       setPlayers(newPlayers);
                     }}
                   >
-                    <SelectTrigger className="bg-white/5 border-white/10 text-white h-12 text-lg">
+                    <SelectTrigger className="bg-white/5 border-white/10 text-white h-11 text-base">
                       <SelectValue placeholder={`Select Player ${idx + 1}`} />
                     </SelectTrigger>
                     <SelectContent className="bg-[#064e3b] border-white/20 text-white">

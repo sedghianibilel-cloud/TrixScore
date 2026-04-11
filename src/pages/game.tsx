@@ -12,6 +12,7 @@ import { Crown, Diamond, Layers, Flag, Users2, Star, Hash, Ban, Loader2, Trophy,
 // ── Constants ────────────────────────────────────────────────────────────────
 const SUIT_SYMBOL: Record<string, string> = { H: "♥", D: "♦", C: "♣", S: "♠" }
 const RANKS = ["7", "8", "9", "10", "J", "Q", "K", "A"]
+const TRICK_RANKS = ["7", "8", "9", "J", "Q", "K", "10", "A"]
 const SUITS = ["H", "D", "C", "S"]
 
 const GAMES = [
@@ -29,6 +30,7 @@ const GAMES = [
 const getSuit = (c: string) => c[c.length - 1] as "H" | "D" | "C" | "S"
 const getRank = (c: string) => c.slice(0, -1)
 const rankIdx  = (c: string) => RANKS.indexOf(getRank(c))
+const trickRankIdx = (c: string) => TRICK_RANKS.indexOf(getRank(c))
 
 function penaltyLeadCards(game: string): string[] {
   const hearts = RANKS.map(r => r + "H")
@@ -150,27 +152,33 @@ function PlayerZone({ seat, cardCount = 0, isActive, isChooser, isDoubled, hasVe
   if (!seat) return <div className={cn("flex items-center justify-center w-28 h-20 rounded-xl bg-white/5 border border-dashed border-white/10", position === "left" || position === "right" ? "flex-col" : "")}><span className="text-white/20 text-xs">Empty</span></div>
 
   const isHorizontal = position === "top"
+  const isSide = position === "left" || position === "right"
+
   return (
     <div className={cn(
       "flex gap-2 p-2 rounded-xl border transition-all",
       isHorizontal ? "flex-row items-center" : "flex-col items-center",
-      isActive ? "bg-yellow-400/20 border-yellow-400/60 shadow-lg shadow-yellow-400/20" : "bg-white/10 border-white/20"
+      isActive ? "bg-yellow-400/20 border-yellow-400/60 shadow-lg shadow-yellow-400/20" : "bg-white/10 border-white/20",
+      isSide && "w-24" // Optimize horizontal space for side players
     )}>
-      <div className={cn("flex -space-x-5", isHorizontal ? "flex-row" : "flex-row")}>
+      <div className={cn(
+        "flex",
+        isHorizontal ? "-space-x-5 flex-row" : "-space-y-10 flex-col py-4"
+      )}>
         {Array.from({ length: Math.min(cardCount, 8) }).map((_, i) => (
-          <div key={i} className="relative transition-transform hover:-translate-y-1">
+          <div key={i} className="relative transition-transform hover:scale-110">
             <CardBack small />
           </div>
         ))}
       </div>
-      <div className={cn("text-center", !isHorizontal && "min-w-0")}>
-        <p className="text-xs font-bold text-white truncate max-w-[80px]">{seat.name}</p>
+      <div className={cn("text-center w-full", !isHorizontal && "mt-1")}>
+        <p className="text-[10px] font-bold text-white truncate px-1">{seat.name}</p>
         <p className="text-sm font-black text-yellow-400">{seat.score}</p>
         <div className="flex flex-wrap gap-0.5 justify-center mt-0.5">
-          {isChooser && <Badge className="bg-yellow-500 text-emerald-950 text-[9px] px-1 h-3">CHOOSER</Badge>}
-          {isDoubled && <Badge className="bg-orange-500 text-white text-[9px] px-1 h-3">2×</Badge>}
-          {!hasVeto && <Badge className="bg-red-700 text-white text-[9px] px-1 h-3">NO VETO</Badge>}
-          {isActive && <Badge className="bg-white text-emerald-950 text-[9px] px-1 h-3 animate-pulse">TURN</Badge>}
+          {isChooser && <Badge className="bg-yellow-500 text-emerald-950 text-[8px] px-1 h-3">PICK</Badge>}
+          {isDoubled && <Badge className="bg-orange-500 text-white text-[8px] px-1 h-3">2×</Badge>}
+          {!hasVeto && <Badge className="bg-red-700 text-white text-[8px] px-1 h-3">ØV</Badge>}
+          {isActive && <Badge className="bg-white text-emerald-950 text-[8px] px-1 h-3 animate-pulse">TURN</Badge>}
         </div>
       </div>
     </div>
@@ -288,7 +296,7 @@ export default function GamePage() {
 
   // Auto-pass Trix if no cards
   const isMyTurn = gs?.phase === "playing" && (gs?.selectedGame === "trix" ? gs?.trixCurrentPlayerSeat === mySeat : gs?.currentTurnSeat === mySeat)
-  const playable = getPlayableCards(myCards?.cards ?? [], gs, mySeat)
+  const playable = getPlayableCards(Array.isArray(myCards) ? myCards : [], gs, mySeat)
   
   useEffect(() => {
     if (isMyTurn && gs?.phase === "playing" && gs?.selectedGame === "trix" && myCards) {
@@ -338,10 +346,7 @@ export default function GamePage() {
   
 
 
-  const playable = myCards ? getPlayableCards(myCards, gs, mySeat) : []
-  const isMyTurn = gs.phase === "playing" && (
-    gs.selectedGame === "trix" ? gs.trixCurrentPlayerSeat === mySeat : gs.currentTurnSeat === mySeat
-  )
+
   const amChooser = lobby.chooserSeatIndex === mySeat
   const myHasVeto = !lobby.vetoUsedBySeats.includes(mySeat)
 
@@ -483,18 +488,20 @@ export default function GamePage() {
                 <CardContent className="space-y-2">
                   {GAMES.map(g => {
                     const alreadyPlayed = lobby.seats[mySeat]?.chosenGames.includes(g.id)
+                    const isVetoed = gs.vetoedGameId === g.id
                     const Icon = g.icon
                     return (
-                      <Button key={g.id} disabled={alreadyPlayed}
+                      <Button key={g.id} disabled={alreadyPlayed || isVetoed}
                         onClick={() => selectGameMut({ code: code!, seatIndex: mySeat, gameId: g.id }).catch((e: any) => toast.error(e.message))}
                         variant="outline"
                         className={cn("w-full h-14 justify-start gap-3 border-2 transition-all",
-                          alreadyPlayed ? "opacity-40 grayscale" : cn("bg-white/5 hover:bg-white/15", g.border, "text-white")
+                          (alreadyPlayed || isVetoed) ? "opacity-40 grayscale" : cn("bg-white/5 hover:bg-white/15", g.border, "text-white")
                         )}
                       >
                         <Icon className={cn("w-6 h-6", g.color)} />
                         <span className="font-bold">{g.name}</span>
                         {alreadyPlayed && <span className="ml-auto text-xs text-white/40">Played</span>}
+                        {isVetoed && <span className="ml-auto text-xs text-red-400 font-bold uppercase tracking-wider">Vetoed</span>}
                       </Button>
                     )
                   })}
@@ -632,7 +639,9 @@ export default function GamePage() {
             {[...myCards].sort((a, b) => {
               const suitOrder = { H: 0, D: 1, C: 2, S: 3 }
               const sd = suitOrder[getSuit(a)] - suitOrder[getSuit(b)]
-              return sd !== 0 ? sd : rankIdx(a) - rankIdx(b)
+              if (sd !== 0) return sd
+              const ri = gs.selectedGame === "trix" ? rankIdx : trickRankIdx
+              return ri(a) - ri(b)
             }).map(card => (
               <PlayingCard
                 key={card}

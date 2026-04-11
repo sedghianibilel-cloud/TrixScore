@@ -1,14 +1,16 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
 // ─── Card utilities ──────────────────────────────────────────────────────────
 const RANKS = ["7", "8", "9", "10", "J", "Q", "K", "A"];
+const TRICK_RANKS = ["7", "8", "9", "J", "Q", "K", "10", "A"];
 const SUITS = ["H", "D", "C", "S"];
 
 const getSuit = (c: string) => c[c.length - 1];
 const getRank = (c: string) => c.slice(0, -1);
 const rankIdx = (c: string) => RANKS.indexOf(getRank(c));
+const trickRankIdx = (c: string) => TRICK_RANKS.indexOf(getRank(c));
 
 function buildDeck(): string[] {
   const deck: string[] = [];
@@ -42,7 +44,7 @@ function trickWinner(trick: { seatIndex: number; card: string }[]): number {
   const leadSuit = getSuit(trick[0].card);
   let best = trick[0];
   for (const t of trick)
-    if (getSuit(t.card) === leadSuit && rankIdx(t.card) > rankIdx(best.card)) best = t;
+    if (getSuit(t.card) === leadSuit && trickRankIdx(t.card) > trickRankIdx(best.card)) best = t;
   return best.seatIndex;
 }
 
@@ -261,6 +263,7 @@ export const startGame = mutation({
       trixPiles: { H: [], D: [], C: [], S: [] },
       trixCurrentPlayerSeat: (lobby.chooserSeatIndex + 1) % 4,
       bonusPlay: false,
+      vetoedGameId: undefined,
       roundScoreSummary: undefined,
     });
   },
@@ -278,13 +281,17 @@ export const selectGame = mutation({
 
     const chooserSeat = lobby.seats[seatIndex];
     if (chooserSeat.chosenGames.includes(gameId)) throw new Error("Already played this game");
+    if (gameId === gs.vetoedGameId) throw new Error("This game was vetoed and cannot be chosen again this turn");
 
-    // Check if all others have used their vetos → skip veto window
+    // Check if it's the last game for this player (8th game)
+    const isLastGame = chooserSeat.chosenGames.length === 7;
+
+    // Check if all others have used their vetos or it's the last game → skip veto window
     const otherSeats = [0, 1, 2, 3].filter((i) => i !== seatIndex);
     const allVetosUsed = otherSeats.every((i) => lobby.vetoUsedBySeats.includes(i));
     const hadVetoThisRound = gs.vetoedBySeat !== undefined;
 
-    if (allVetosUsed || hadVetoThisRound) {
+    if (allVetosUsed || hadVetoThisRound || isLastGame) {
       // Start immediately
       const ds = gs.vetoedBySeat !== undefined
         ? [seatIndex, gs.vetoedBySeat]
@@ -324,8 +331,8 @@ export const useVeto = mutation({
 
     await ctx.db.patch(lobby._id, { vetoUsedBySeats: [...lobby.vetoUsedBySeats, seatIndex] });
     await ctx.db.patch(gs._id, {
-      phase: "selection",
       vetoedBySeat: seatIndex,
+      vetoedGameId: gs.selectedGame,
       selectedGame: undefined,
       vetoWindowStart: undefined,
     });
@@ -417,13 +424,13 @@ export const playCard = mutation({
 });
 
 export async function performPlayCard(ctx: any, code: string, seatIndex: number, card: string) {
-    const lobby = await ctx.db.query("lobbies").withIndex("by_code", (q) => q.eq("code", code)).first();
+    const lobby = await ctx.db.query("lobbies").withIndex("by_code", (q: any) => q.eq("code", code)).first();
     if (!lobby) throw new Error("Lobby not found");
-    const gs = await ctx.db.query("gameState").withIndex("by_lobby", (q) => q.eq("lobbyId", lobby._id)).first();
+    const gs = await ctx.db.query("gameState").withIndex("by_lobby", (q: any) => q.eq("lobbyId", lobby._id)).first();
     if (!gs || gs.phase !== "playing") throw new Error("Not in playing phase");
 
     const handDoc = await ctx.db.query("playerHands")
-      .withIndex("by_lobby_seat", (q) => q.eq("lobbyId", lobby._id).eq("seatIndex", seatIndex))
+      .withIndex("by_lobby_seat", (q: any) => q.eq("lobbyId", lobby._id).eq("seatIndex", seatIndex))
       .first();
     if (!handDoc) throw new Error("Hand not found");
     if (!handDoc.cards.includes(card)) throw new Error("Card not in hand");
@@ -441,7 +448,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
       // Update pile
       const suit = getSuit(card) as "H" | "D" | "C" | "S";
       const newPiles = { ...gs.trixPiles, [suit]: [...gs.trixPiles[suit], card] };
-      const newCards = handDoc.cards.filter((c) => c !== card);
+      const newCards = handDoc.cards.filter((c: string) => c !== card);
       await ctx.db.patch(handDoc._id, { cards: newCards });
 
       const isAce = getRank(card) === "A";
@@ -456,7 +463,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
           "trix", [[], [], [], []], 0, newTrixOrder,
           gs.doublingSeats, lobby.seats
         );
-        const newSeats = lobby.seats.map((s, i) => ({
+        const newSeats = lobby.seats.map((s: any, i: number) => ({
           ...s,
           score: summary[i].totalScore,
           mkabbatha: summary[i].mkabbatha,
@@ -465,35 +472,43 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
           chosenGames: s.seatIndex === lobby.chooserSeatIndex
             ? [...s.chosenGames, "trix"] : s.chosenGames,
         }));
-        const isGameOver = newSeats.every((s) => s.chosenGames.length === 8);
+        const isGameOver = newSeats.every((s: any) => s.chosenGames.length === 8);
         await ctx.db.patch(lobby._id, { seats: newSeats });
         await ctx.db.patch(gs._id, {
           trixPiles: newPiles, trixOrder: newTrixOrder,
           phase: isGameOver ? "game-over" : "round-over",
-          roundScoreSummary: summary.map((s) => ({ name: s.name, roundScore: s.roundScore, totalScore: s.totalScore, isDoubled: s.isDoubled })),
+          roundScoreSummary: summary.map((s: any) => ({ name: s.name, roundScore: s.roundScore, totalScore: s.totalScore, isDoubled: s.isDoubled })),
         });
         return;
       }
 
       // Advance turn (with auto-skip for no valid moves or already finished)
-      let nextSeat = isAce && !newCards.length === false
-        ? seatIndex  // bonus play only if still has cards
-        : (seatIndex + 1) % 4;
       if (isAce && newCards.length > 0) {
-        // bonus play: same player goes again
-        const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
-        await ctx.db.patch(gs._id, { trixPiles: newPiles, trixOrder: newTrixOrder, bonusPlay: true, trixCurrentPlayerSeat: seatIndex, turnSequenceId: nextTurnSeq });
-        await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
-        return;
+        // bonus play: only if the player has valid moves left
+        const bonusValid = getValidTrixCards(newCards, newPiles);
+        if (bonusValid.length > 0) {
+          const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
+          await ctx.db.patch(gs._id, { 
+            trixPiles: newPiles, 
+            trixOrder: newTrixOrder, 
+            bonusPlay: true, 
+            trixCurrentPlayerSeat: seatIndex, 
+            turnSequenceId: nextTurnSeq 
+          });
+          await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
+          return;
+        }
+        // If no bonus moves possible, bonusPlay becomes false naturally and we find next player below
       }
 
       // Find next player with valid moves
       const allHands: string[][] = [];
       for (let i = 0; i < 4; i++) {
-        const h = await ctx.db.query("playerHands").withIndex("by_lobby_seat", (q) => q.eq("lobbyId", lobby._id).eq("seatIndex", i)).first();
+        const h = await ctx.db.query("playerHands").withIndex("by_lobby_seat", (q: any) => q.eq("lobbyId", lobby._id).eq("seatIndex", i)).first();
         allHands[i] = h?.cards ?? [];
       }
       let tries = 0;
+      let nextSeat = (seatIndex + 1) % 4;
       while (tries < 4) {
         if (!newTrixOrder.includes(nextSeat) && getValidTrixCards(allHands[nextSeat], newPiles).length > 0) break;
         nextSeat = (nextSeat + 1) % 4;
@@ -517,8 +532,8 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
     let playable = handDoc.cards;
     if (!isLeading) {
       const leadSuit = getSuit(trick[0].card);
-      const hasSuit = handDoc.cards.some((c) => getSuit(c) === leadSuit);
-      if (hasSuit) playable = handDoc.cards.filter((c) => getSuit(c) === leadSuit);
+      const hasSuit = handDoc.cards.some((c: string) => getSuit(c) === leadSuit);
+      if (hasSuit) playable = handDoc.cards.filter((c: string) => getSuit(c) === leadSuit);
     }
 
     if (!playable.includes(card)) {
@@ -528,7 +543,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
     // 2. First trick rule: NO valued cards allowed unless player has no other choice
     if (gs.completedTricks === 0) {
       const valued = getValuedCards(gs.selectedGame!);
-      const safeCards = playable.filter((c) => !valued.includes(c));
+      const safeCards = playable.filter((c: string) => !valued.includes(c));
       if (safeCards.length > 0 && valued.includes(card)) {
         throw new Error("Cannot play valued cards in the first trick unless forced");
       }
@@ -540,8 +555,8 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
       const game = gs.selectedGame!;
       const brokenSuits: string[] = [];
 
-      if ((game === "queen-spades" || game === "general") && allPlayed.some((c) => getSuit(c) === "H")) brokenSuits.push("H");
-      if ((game === "diamonds" || game === "general") && allPlayed.some((c) => getSuit(c) === "D")) brokenSuits.push("D");
+      if ((game === "queen-spades" || game === "general") && allPlayed.some((c: string) => getSuit(c) === "H")) brokenSuits.push("H");
+      if ((game === "diamonds" || game === "general") && allPlayed.some((c: string) => getSuit(c) === "D")) brokenSuits.push("D");
 
       const isRestricted = (
         (game === "queen-spades" && getSuit(card) === "H" && !brokenSuits.includes("H")) ||
@@ -551,7 +566,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
       );
 
       if (isRestricted) {
-        const safeLeadCards = playable.filter((c) => {
+        const safeLeadCards = playable.filter((c: string) => {
           if (game === "queen-spades" && getSuit(c) === "H" && !brokenSuits.includes("H")) return false;
           if (game === "diamonds" && getSuit(c) === "D" && !brokenSuits.includes("D")) return false;
           if (game === "general" && getSuit(c) === "H" && !brokenSuits.includes("H")) return false;
@@ -566,7 +581,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
     }
 
     const newTrick = [...trick, { seatIndex, card }];
-    const newHand = handDoc.cards.filter((c) => c !== card);
+    const newHand = handDoc.cards.filter((c: string) => c !== card);
     await ctx.db.patch(handDoc._id, { cards: newHand });
 
     if (newTrick.length < 4) {
@@ -577,6 +592,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
         currentTurnSeat: (seatIndex + 1) % 4,
         turnSequenceId: nextTurnSeq,
       });
+      // Important: even if not finished, we update turnSequenceId to reset 30s timer
       await ctx.scheduler.runAfter(30000, internal.game.autoPlayTurn, { code, turnSequenceId: nextTurnSeq });
       return;
     }
@@ -584,7 +600,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
     // Resolve trick
     const winner = trickWinner(newTrick);
     const allTrickCards = newTrick.map((t) => t.card);
-    const newTricksTaken = gs.tricksTaken.map((cards, i) =>
+    const newTricksTaken = gs.tricksTaken.map((cards: string[], i: number) =>
       i === winner ? [...cards, ...allTrickCards] : cards
     );
     const newCompleted = gs.completedTricks + 1;
@@ -594,8 +610,8 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
     const allPlayed = newTricksTaken.flat();
     if (gs.selectedGame === "king" && allPlayed.includes("KH")) terminateEarly = true;
     if (gs.selectedGame === "queens" && ["QH", "QD", "QC", "QS"].every(q => allPlayed.includes(q))) terminateEarly = true;
-    if (gs.selectedGame === "diamonds" && allPlayed.filter(c => c.endsWith("D")).length === 8) terminateEarly = true;
-    if (gs.selectedGame === "queen-spades" && allPlayed.includes("QS") && allPlayed.filter(c => c.endsWith("H")).length === 8) terminateEarly = true;
+    if (gs.selectedGame === "diamonds" && allPlayed.filter((c: string) => c.endsWith("D")).length === 8) terminateEarly = true;
+    if (gs.selectedGame === "queen-spades" && allPlayed.includes("QS") && allPlayed.filter((c: string) => c.endsWith("H")).length === 8) terminateEarly = true;
 
     if (newCompleted < 8 && !terminateEarly) {
       const nextTurnSeq = (gs.turnSequenceId ?? 0) + 1;
@@ -622,7 +638,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
       lobby.seats
     );
     const gameId = gs.selectedGame!;
-    const newSeats = lobby.seats.map((s, i) => ({
+    const newSeats = lobby.seats.map((s: any, i: number) => ({
       ...s,
       score: summary[i].totalScore,
       mkabbatha: summary[i].mkabbatha,
@@ -631,7 +647,7 @@ export async function performPlayCard(ctx: any, code: string, seatIndex: number,
       chosenGames: s.seatIndex === lobby.chooserSeatIndex
         ? [...s.chosenGames, gameId] : s.chosenGames,
     }));
-    const isGameOver = newSeats.every((s) => s.chosenGames.length === 8);
+    const isGameOver = newSeats.every((s: any) => s.chosenGames.length === 8);
     await ctx.db.patch(lobby._id, { seats: newSeats });
     await ctx.db.patch(gs._id, {
       currentTrick: newTrick,
@@ -690,6 +706,7 @@ export const nextRound = mutation({
       trixPiles: { H: [], D: [], C: [], S: [] },
       trixCurrentPlayerSeat: (nextChooser + 1) % 4,
       bonusPlay: false,
+      vetoedGameId: undefined,
       roundScoreSummary: undefined,
     });
   },
