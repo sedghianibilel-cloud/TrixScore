@@ -9,6 +9,8 @@ import { ErrorBoundary } from '@/components/error/boundary';
 import { RouteErrorBoundary } from '@/components/error/route-error-boundary';
 import { HomePage } from '@/pages/home'
 import StatsPage from '@/pages/stats'
+import LobbyPage from '@/pages/lobby'
+import GamePage from '@/pages/game'
 import '@/index.css'
 import { Toaster } from 'sonner'
 
@@ -30,7 +32,17 @@ const router = createBrowserRouter([
     path: "/stats",
     element: <StatsPage />,
     errorElement: <RouteErrorBoundary />,
-  }
+  },
+  {
+    path: "/lobby",
+    element: <LobbyPage />,
+    errorElement: <RouteErrorBoundary />,
+  },
+  {
+    path: "/game/:code",
+    element: <GamePage />,
+    errorElement: <RouteErrorBoundary />,
+  },
 ]);
 
 // Signal to parent frame that app is ready

@@ -36,7 +36,8 @@ import {
   Spade,
   Plus,
   Minus,
-  Loader2
+  Loader2,
+  LogIn,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -433,6 +434,25 @@ export function HomePage() {
               >
                 <Trophy className="mr-2 w-4 h-4" /> Hall of Records 🏆
               </Button>
+
+              <div className="border-t border-white/10 pt-4 mt-2 space-y-3">
+                <p className="text-center text-emerald-300/40 text-xs uppercase tracking-widest font-bold">⚡ Online Multiplayer</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    onClick={() => navigate('/lobby')}
+                    className="h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-bold border-0 shadow-[0_3px_0_0_#065f46]"
+                  >
+                    <Plus className="mr-1.5 w-4 h-4" /> Create Lobby
+                  </Button>
+                  <Button
+                    onClick={() => navigate('/lobby')}
+                    variant="outline"
+                    className="h-12 bg-white/10 border-white/20 text-white hover:bg-white/20 font-bold"
+                  >
+                    <LogIn className="mr-1.5 w-4 h-4" /> Join Lobby
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
